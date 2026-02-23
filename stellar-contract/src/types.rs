@@ -1,5 +1,92 @@
 use soroban_sdk::{contracttype, Address, String};
 
+/// Represents an incentive offered by a manufacturer to encourage recycling
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Incentive {
+    /// Unique identifier for the incentive
+    pub id: u64,
+    /// Address of the manufacturer offering the incentive
+    pub rewarder: Address,
+    /// Type of waste this incentive targets
+    pub waste_type: WasteType,
+    /// Reward points per kilogram
+    pub reward_points: u64,
+    /// Total points budget allocated for this incentive
+    pub total_budget: u64,
+    /// Remaining points budget available
+    pub remaining_budget: u64,
+    /// Whether the incentive is currently active
+    pub active: bool,
+    /// Timestamp when the incentive was created
+    pub created_at: u64,
+}
+
+impl Incentive {
+    /// Creates a new Incentive instance
+    pub fn new(
+        id: u64,
+        rewarder: Address,
+        waste_type: WasteType,
+        reward_points: u64,
+        total_budget: u64,
+        created_at: u64,
+    ) -> Self {
+        Self {
+            id,
+            rewarder,
+            waste_type,
+            reward_points,
+            total_budget,
+            remaining_budget: total_budget,
+            active: true,
+            created_at,
+        }
+    }
+
+    /// Deactivates the incentive
+    pub fn deactivate(&mut self) {
+        self.active = false;
+    }
+
+    /// Calculates reward for a given weight in grams
+    pub fn calculate_reward(&self, weight_grams: u64) -> u64 {
+        // Convert grams to kg and multiply by reward points
+        (weight_grams / 1000) * self.reward_points
+    }
+
+    /// Attempts to claim a reward, returns the amount claimed
+    /// Returns None if insufficient budget
+    pub fn claim_reward(&mut self, weight_grams: u64) -> Option<u64> {
+        if !self.active {
+            return None;
+        }
+
+        let reward = self.calculate_reward(weight_grams);
+        if reward > self.remaining_budget {
+            return None;
+        }
+
+        self.remaining_budget -= reward;
+
+        // Auto-deactivate if budget exhausted
+        if self.remaining_budget == 0 {
+            self.active = false;
+        }
+
+        Some(reward)
+    }
+
+    /// Checks if the incentive has sufficient budget for a reward
+    pub fn has_sufficient_budget(&self, weight_grams: u64) -> bool {
+        if !self.active {
+            return false;
+        }
+        let reward = self.calculate_reward(weight_grams);
+        reward <= self.remaining_budget
+    }
+}
+
 /// Represents a transfer of waste from one participant to another
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -836,6 +923,7 @@ mod tests {
 mod waste_transfer_tests {
     use super::*;
     use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::Vec;
 
     #[test]
     fn test_waste_transfer_creation() {
@@ -923,5 +1011,178 @@ mod waste_transfer_tests {
 
         assert_eq!(transfer1, transfer2);
         assert_eq!(transfer1.waste_id, transfer2.waste_id);
+    }
+}
+
+#[cfg(test)]
+mod incentive_tests {
+    use super::*;
+    use soroban_sdk::testutils::Address as _;
+
+    #[test]
+    fn test_incentive_creation() {
+        let env = soroban_sdk::Env::default();
+        let rewarder = Address::generate(&env);
+
+        let incentive = Incentive::new(
+            1,
+            rewarder.clone(),
+            WasteType::PetPlastic,
+            50,
+            10000,
+            1234567890,
+        );
+
+        assert_eq!(incentive.id, 1);
+        assert_eq!(incentive.rewarder, rewarder);
+        assert_eq!(incentive.waste_type, WasteType::PetPlastic);
+        assert_eq!(incentive.reward_points, 50);
+        assert_eq!(incentive.total_budget, 10000);
+        assert_eq!(incentive.remaining_budget, 10000);
+        assert!(incentive.active);
+        assert_eq!(incentive.created_at, 1234567890);
+    }
+
+    #[test]
+    fn test_incentive_deactivate() {
+        let env = soroban_sdk::Env::default();
+        let rewarder = Address::generate(&env);
+
+        let mut incentive = Incentive::new(1, rewarder, WasteType::Metal, 100, 5000, 0);
+        assert!(incentive.active);
+
+        incentive.deactivate();
+        assert!(!incentive.active);
+    }
+
+    #[test]
+    fn test_incentive_calculate_reward() {
+        let env = soroban_sdk::Env::default();
+        let rewarder = Address::generate(&env);
+
+        let incentive = Incentive::new(1, rewarder, WasteType::PetPlastic, 50, 10000, 0);
+
+        // 5kg (5000g) * 50 points/kg = 250 points
+        assert_eq!(incentive.calculate_reward(5000), 250);
+
+        // 10kg * 50 points/kg = 500 points
+        assert_eq!(incentive.calculate_reward(10000), 500);
+
+        // Less than 1kg should give 0 points
+        assert_eq!(incentive.calculate_reward(500), 0);
+    }
+
+    #[test]
+    fn test_incentive_claim_reward() {
+        let env = soroban_sdk::Env::default();
+        let rewarder = Address::generate(&env);
+
+        let mut incentive = Incentive::new(1, rewarder, WasteType::Metal, 100, 1000, 0);
+
+        // Claim 5kg worth (500 points)
+        let claimed = incentive.claim_reward(5000);
+        assert_eq!(claimed, Some(500));
+        assert_eq!(incentive.remaining_budget, 500);
+        assert!(incentive.active);
+
+        // Claim remaining 5kg (500 points)
+        let claimed = incentive.claim_reward(5000);
+        assert_eq!(claimed, Some(500));
+        assert_eq!(incentive.remaining_budget, 0);
+        assert!(!incentive.active); // Auto-deactivated
+    }
+
+    #[test]
+    fn test_incentive_claim_insufficient_budget() {
+        let env = soroban_sdk::Env::default();
+        let rewarder = Address::generate(&env);
+
+        let mut incentive = Incentive::new(1, rewarder, WasteType::Plastic, 50, 1000, 0);
+
+        // Try to claim 30kg worth (1500 points) - exceeds budget
+        let claimed = incentive.claim_reward(30000);
+        assert_eq!(claimed, None);
+        assert_eq!(incentive.remaining_budget, 1000); // Budget unchanged
+        assert!(incentive.active);
+    }
+
+    #[test]
+    fn test_incentive_claim_when_inactive() {
+        let env = soroban_sdk::Env::default();
+        let rewarder = Address::generate(&env);
+
+        let mut incentive = Incentive::new(1, rewarder, WasteType::Glass, 30, 5000, 0);
+        incentive.deactivate();
+
+        // Cannot claim from inactive incentive
+        let claimed = incentive.claim_reward(5000);
+        assert_eq!(claimed, None);
+    }
+
+    #[test]
+    fn test_incentive_has_sufficient_budget() {
+        let env = soroban_sdk::Env::default();
+        let rewarder = Address::generate(&env);
+
+        let incentive = Incentive::new(1, rewarder, WasteType::Paper, 20, 1000, 0);
+
+        // 10kg * 20 = 200 points (sufficient)
+        assert!(incentive.has_sufficient_budget(10000));
+
+        // 50kg * 20 = 1000 points (exactly sufficient)
+        assert!(incentive.has_sufficient_budget(50000));
+
+        // 60kg * 20 = 1200 points (insufficient)
+        assert!(!incentive.has_sufficient_budget(60000));
+    }
+
+    #[test]
+    fn test_incentive_has_sufficient_budget_when_inactive() {
+        let env = soroban_sdk::Env::default();
+        let rewarder = Address::generate(&env);
+
+        let mut incentive = Incentive::new(1, rewarder, WasteType::Metal, 100, 5000, 0);
+        incentive.deactivate();
+
+        // Inactive incentive always returns false
+        assert!(!incentive.has_sufficient_budget(1000));
+    }
+
+    #[test]
+    fn test_incentive_storage_compatibility() {
+        let env = soroban_sdk::Env::default();
+        let rewarder = Address::generate(&env);
+
+        let incentive = Incentive::new(1, rewarder, WasteType::PetPlastic, 50, 10000, 0);
+
+        // Incentive can be stored (validated through contract tests)
+        assert_eq!(incentive.id, 1);
+        assert_eq!(incentive.total_budget, 10000);
+    }
+
+    #[test]
+    fn test_incentive_equality() {
+        let env = soroban_sdk::Env::default();
+        let rewarder = Address::generate(&env);
+
+        let incentive1 = Incentive::new(1, rewarder.clone(), WasteType::Metal, 100, 5000, 1000);
+        let incentive2 = Incentive::new(1, rewarder.clone(), WasteType::Metal, 100, 5000, 1000);
+        let incentive3 = Incentive::new(2, rewarder, WasteType::Metal, 100, 5000, 1000);
+
+        assert_eq!(incentive1, incentive2);
+        assert_ne!(incentive1, incentive3);
+    }
+
+    #[test]
+    fn test_incentive_clone() {
+        let env = soroban_sdk::Env::default();
+        let rewarder = Address::generate(&env);
+
+        let incentive1 = Incentive::new(1, rewarder, WasteType::Glass, 30, 8000, 0);
+        let incentive2 = incentive1.clone();
+
+        assert_eq!(incentive1, incentive2);
+        assert_eq!(incentive1.id, incentive2.id);
+        assert_eq!(incentive1.remaining_budget, incentive2.remaining_budget);
     }
 }
