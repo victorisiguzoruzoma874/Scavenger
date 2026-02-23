@@ -1,284 +1,206 @@
 #![cfg(test)]
 
-use soroban_sdk::{
-    testutils::{Address as _, Events, Ledger},
-    vec, Address, Env, IntoVal, String,
-};
+use soroban_sdk::{testutils::Address as _, Address, Env};
 
-use crate::{types::Role, ScavengerContract, ScavengerContractClient};
+use crate::{ScavengerContract, ScavengerContractClient};
 
-fn create_test_contract(env: &Env) -> (ScavengerContractClient, Address, Address) {
+fn create_test_contract(env: &Env) -> (ScavengerContractClient, Address, Address, Address) {
     let contract_id = env.register(ScavengerContract, ());
     let client = ScavengerContractClient::new(env, &contract_id);
-
+    
     let admin = Address::generate(env);
     let token_address = Address::generate(env);
-
-    (client, admin, token_address)
+    let charity_address = Address::generate(env);
+    
+    (client, admin, token_address, charity_address)
 }
 
 #[test]
-fn test_register_participant_recycler() {
+fn test_initialization() {
     let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
     env.mock_all_auths();
-
-    let (client, admin, token_address) = create_test_contract(&env);
-    client.__constructor(&admin, &token_address);
-
-    let participant = Address::generate(&env);
-    let name = String::from_str(&env, "John Recycler");
-
-    client.register_participant(&participant, &Role::Recycler, &name, &100, &200);
-
-    // Verify registration
-    assert!(client.is_registered(&participant));
-
-    let stored = client.get_participant(&participant).unwrap();
-    assert_eq!(stored.address, participant);
-    assert_eq!(stored.role, Role::Recycler);
-    assert_eq!(stored.name, name);
-    assert_eq!(stored.latitude, 100);
-    assert_eq!(stored.longitude, 200);
+    
+    client.__constructor(&admin, &token_address, &charity_address, &30, &20);
+    
+    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_token_address(), token_address);
+    assert_eq!(client.get_charity_address(), charity_address);
+    assert_eq!(client.get_collector_percentage(), 30);
+    assert_eq!(client.get_owner_percentage(), 20);
+    assert_eq!(client.get_total_earned(), 0);
 }
 
 #[test]
-fn test_register_participant_collector() {
+#[should_panic(expected = "Total percentages cannot exceed 100")]
+fn test_initialization_invalid_percentages() {
     let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
     env.mock_all_auths();
-
-    let (client, admin, token_address) = create_test_contract(&env);
-    client.__constructor(&admin, &token_address);
-
-    let participant = Address::generate(&env);
-    let name = String::from_str(&env, "Jane Collector");
-
-    client.register_participant(&participant, &Role::Collector, &name, &-50, &75);
-
-    // Verify registration
-    assert!(client.is_registered(&participant));
-
-    let stored = client.get_participant(&participant).unwrap();
-    assert_eq!(stored.role, Role::Collector);
-    assert_eq!(stored.latitude, -50);
-    assert_eq!(stored.longitude, 75);
+    
+    // This should panic because 60 + 50 = 110 > 100
+    client.__constructor(&admin, &token_address, &charity_address, &60, &50);
 }
 
 #[test]
-fn test_register_participant_manufacturer() {
+fn test_update_token_address() {
     let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
     env.mock_all_auths();
-
-    let (client, admin, token_address) = create_test_contract(&env);
-    client.__constructor(&admin, &token_address);
-
-    let participant = Address::generate(&env);
-    let name = String::from_str(&env, "Bob Manufacturer");
-
-    client.register_participant(&participant, &Role::Manufacturer, &name, &0, &0);
-
-    // Verify registration
-    assert!(client.is_registered(&participant));
-
-    let stored = client.get_participant(&participant).unwrap();
-    assert_eq!(stored.role, Role::Manufacturer);
+    
+    client.__constructor(&admin, &token_address, &charity_address, &30, &20);
+    
+    let new_token_address = Address::generate(&env);
+    client.update_token_address(&admin, &new_token_address);
+    
+    assert_eq!(client.get_token_address(), new_token_address);
 }
 
 #[test]
-fn test_all_roles_work() {
+fn test_update_charity_address() {
     let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
     env.mock_all_auths();
-
-    let (client, admin, token_address) = create_test_contract(&env);
-    client.__constructor(&admin, &token_address);
-
-    // Register recycler
-    let recycler = Address::generate(&env);
-    client.register_participant(
-        &recycler,
-        &Role::Recycler,
-        &String::from_str(&env, "Recycler"),
-        &10,
-        &20,
-    );
-
-    // Register collector
-    let collector = Address::generate(&env);
-    client.register_participant(
-        &collector,
-        &Role::Collector,
-        &String::from_str(&env, "Collector"),
-        &30,
-        &40,
-    );
-
-    // Register manufacturer
-    let manufacturer = Address::generate(&env);
-    client.register_participant(
-        &manufacturer,
-        &Role::Manufacturer,
-        &String::from_str(&env, "Manufacturer"),
-        &50,
-        &60,
-    );
-
-    // Verify all registered
-    assert!(client.is_registered(&recycler));
-    assert!(client.is_registered(&collector));
-    assert!(client.is_registered(&manufacturer));
-
-    // Verify roles
-    assert_eq!(
-        client.get_participant(&recycler).unwrap().role,
-        Role::Recycler
-    );
-    assert_eq!(
-        client.get_participant(&collector).unwrap().role,
-        Role::Collector
-    );
-    assert_eq!(
-        client.get_participant(&manufacturer).unwrap().role,
-        Role::Manufacturer
-    );
+    
+    client.__constructor(&admin, &token_address, &charity_address, &30, &20);
+    
+    let new_charity_address = Address::generate(&env);
+    client.update_charity_address(&admin, &new_charity_address);
+    
+    assert_eq!(client.get_charity_address(), new_charity_address);
 }
 
 #[test]
-#[should_panic(expected = "Participant already registered")]
-fn test_cannot_register_twice() {
+fn test_update_collector_percentage() {
     let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
     env.mock_all_auths();
-
-    let (client, admin, token_address) = create_test_contract(&env);
-    client.__constructor(&admin, &token_address);
-
-    let participant = Address::generate(&env);
-    let name = String::from_str(&env, "Test User");
-
-    // First registration
-    client.register_participant(&participant, &Role::Recycler, &name, &100, &200);
-
-    // Try to register again - should panic
-    client.register_participant(&participant, &Role::Collector, &name, &300, &400);
+    
+    client.__constructor(&admin, &token_address, &charity_address, &30, &20);
+    
+    client.update_collector_percentage(&admin, &40);
+    
+    assert_eq!(client.get_collector_percentage(), 40);
 }
 
 #[test]
-fn test_participant_not_registered() {
+#[should_panic(expected = "Total percentages cannot exceed 100")]
+fn test_update_collector_percentage_invalid() {
     let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
     env.mock_all_auths();
-
-    let (client, admin, token_address) = create_test_contract(&env);
-    client.__constructor(&admin, &token_address);
-
-    let participant = Address::generate(&env);
-
-    // Should not be registered
-    assert!(!client.is_registered(&participant));
-    assert_eq!(client.get_participant(&participant), None);
+    
+    client.__constructor(&admin, &token_address, &charity_address, &30, &20);
+    
+    // This should panic because 85 + 20 = 105 > 100
+    client.update_collector_percentage(&admin, &85);
 }
 
 #[test]
-fn test_event_emitted() {
+fn test_update_owner_percentage() {
     let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
     env.mock_all_auths();
-
-    let (client, admin, token_address) = create_test_contract(&env);
-    client.__constructor(&admin, &token_address);
-
-    let participant = Address::generate(&env);
-    let name = String::from_str(&env, "Event Test");
-    let role = Role::Recycler;
-    let latitude = 123i64;
-    let longitude = 456i64;
-
-    client.register_participant(&participant, &role, &name, &latitude, &longitude);
-
-    // Get events
-    let events = env.events().all();
-    let event = vec![&env, events.last().unwrap()];
-
-    // Verify event was emitted
-    assert_eq!(event.len(), 1);
+    
+    client.__constructor(&admin, &token_address, &charity_address, &30, &20);
+    
+    client.update_owner_percentage(&admin, &25);
+    
+    assert_eq!(client.get_owner_percentage(), 25);
 }
 
 #[test]
-fn test_multiple_participants() {
+#[should_panic(expected = "Total percentages cannot exceed 100")]
+fn test_update_owner_percentage_invalid() {
     let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
     env.mock_all_auths();
-
-    let (client, admin, token_address) = create_test_contract(&env);
-    client.__constructor(&admin, &token_address);
-
-    // Register multiple participants
-    for i in 0..5 {
-        let participant = Address::generate(&env);
-        let name = String::from_str(&env, "Participant");
-        let role = if i % 3 == 0 {
-            Role::Recycler
-        } else if i % 3 == 1 {
-            Role::Collector
-        } else {
-            Role::Manufacturer
-        };
-
-        client.register_participant(&participant, &role, &name, &(i as i64), &(i as i64 * 10));
-
-        assert!(client.is_registered(&participant));
-    }
+    
+    client.__constructor(&admin, &token_address, &charity_address, &30, &20);
+    
+    // This should panic because 30 + 75 = 105 > 100
+    client.update_owner_percentage(&admin, &75);
 }
 
 #[test]
-fn test_participant_timestamp() {
+fn test_update_percentages() {
     let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
     env.mock_all_auths();
-
-    // Set ledger timestamp
-    env.ledger().with_mut(|li| {
-        li.timestamp = 1234567890;
-    });
-
-    let (client, admin, token_address) = create_test_contract(&env);
-    client.__constructor(&admin, &token_address);
-
-    let participant = Address::generate(&env);
-    let name = String::from_str(&env, "Timestamp Test");
-
-    client.register_participant(&participant, &Role::Recycler, &name, &100, &200);
-
-    let stored = client.get_participant(&participant).unwrap();
-    assert_eq!(stored.registered_at, 1234567890);
+    
+    client.__constructor(&admin, &token_address, &charity_address, &30, &20);
+    
+    client.update_percentages(&admin, &35, &25);
+    
+    assert_eq!(client.get_collector_percentage(), 35);
+    assert_eq!(client.get_owner_percentage(), 25);
 }
 
 #[test]
-fn test_negative_coordinates() {
+#[should_panic(expected = "Total percentages cannot exceed 100")]
+fn test_update_percentages_invalid() {
     let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
     env.mock_all_auths();
-
-    let (client, admin, token_address) = create_test_contract(&env);
-    client.__constructor(&admin, &token_address);
-
-    let participant = Address::generate(&env);
-    let name = String::from_str(&env, "Negative Coords");
-
-    // Test with negative coordinates
-    client.register_participant(&participant, &Role::Recycler, &name, &-90, &-180);
-
-    let stored = client.get_participant(&participant).unwrap();
-    assert_eq!(stored.latitude, -90);
-    assert_eq!(stored.longitude, -180);
+    
+    client.__constructor(&admin, &token_address, &charity_address, &30, &20);
+    
+    // This should panic because 60 + 50 = 110 > 100
+    client.update_percentages(&admin, &60, &50);
 }
 
 #[test]
-fn test_registration_requires_auth() {
+fn test_transfer_admin() {
     let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
     env.mock_all_auths();
+    
+    client.__constructor(&admin, &token_address, &charity_address, &30, &20);
+    
+    let new_admin = Address::generate(&env);
+    client.transfer_admin(&admin, &new_admin);
+    
+    assert_eq!(client.get_admin(), new_admin);
+}
 
-    let (client, admin, token_address) = create_test_contract(&env);
-    client.__constructor(&admin, &token_address);
-
-    let participant = Address::generate(&env);
-    let name = String::from_str(&env, "Auth Test");
-
-    // This should work with mocked auth
-    client.register_participant(&participant, &Role::Recycler, &name, &100, &200);
-
-    assert!(client.is_registered(&participant));
+#[test]
+fn test_configuration_persistence() {
+    let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+    
+    env.mock_all_auths();
+    
+    client.__constructor(&admin, &token_address, &charity_address, &30, &20);
+    
+    // Verify all configuration persists correctly
+    assert_eq!(client.get_admin(), admin);
+    assert_eq!(client.get_token_address(), token_address);
+    assert_eq!(client.get_charity_address(), charity_address);
+    assert_eq!(client.get_collector_percentage(), 30);
+    assert_eq!(client.get_owner_percentage(), 20);
+    assert_eq!(client.get_total_earned(), 0);
+    
+    // Update values
+    let new_token = Address::generate(&env);
+    let new_charity = Address::generate(&env);
+    client.update_token_address(&admin, &new_token);
+    client.update_charity_address(&admin, &new_charity);
+    client.update_percentages(&admin, &40, &30);
+    
+    // Verify persistence after updates
+    assert_eq!(client.get_token_address(), new_token);
+    assert_eq!(client.get_charity_address(), new_charity);
+    assert_eq!(client.get_collector_percentage(), 40);
+    assert_eq!(client.get_owner_percentage(), 30);
 }

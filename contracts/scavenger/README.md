@@ -1,183 +1,116 @@
-# Scavenger Contract - Participant Registration
+# Scavenger Contract - Configuration Storage
 
-This contract implements participant registration for the Scavenger recycling system, allowing users to register as recyclers, collectors, or manufacturers.
+This contract implements configuration storage for the Scavenger application with admin-controlled updates and validation.
 
 ## Features
 
-### Participant Registration
+### Storage Components
 
-The `register_participant` function allows users to register with the following information:
-- Role (Recycler, Collector, or Manufacturer)
-- Name
-- Geographic location (latitude, longitude)
-- Automatic timestamp of registration
+1. **Scavenger Token Address** - Address of the token contract used in the scavenger system
+2. **Charity Contract Address** - Address of the charity contract for donations
+3. **Collector Percentage** - Percentage allocated to collectors (0-100)
+4. **Owner Percentage** - Percentage allocated to owners (0-100)
+5. **Total Tokens Earned** - Running total of tokens earned through the system
+6. **Admin Address** - Address with administrative privileges
 
-### Roles
+### Admin Functions
 
-Three participant roles are supported:
+All configuration updates require admin authentication:
 
-1. **Recycler** - Users who collect and recycle materials
-2. **Collector** - Users who collect materials from recyclers
-3. **Manufacturer** - Users who manufacture products from recycled materials
+- `update_token_address()` - Update the scavenger token address
+- `update_charity_address()` - Update the charity contract address
+- `update_collector_percentage()` - Update collector percentage (validates total ≤ 100)
+- `update_owner_percentage()` - Update owner percentage (validates total ≤ 100)
+- `update_percentages()` - Update both percentages atomically (validates total ≤ 100)
+- `transfer_admin()` - Transfer admin rights to a new address
 
-### Data Structure
+### Read Functions
 
-```rust
-pub struct Participant {
-    pub address: Address,
-    pub role: Role,
-    pub name: String,
-    pub latitude: i64,
-    pub longitude: i64,
-    pub registered_at: u64,
-}
-```
+Public read-only functions to query configuration:
 
-## Functions
+- `get_admin()` - Get current admin address
+- `get_token_address()` - Get scavenger token address
+- `get_charity_address()` - Get charity contract address
+- `get_collector_percentage()` - Get collector percentage
+- `get_owner_percentage()` - Get owner percentage
+- `get_total_earned()` - Get total tokens earned
 
-### Registration
+## Validation Rules
 
-```rust
-pub fn register_participant(
-    env: Env,
-    participant_address: Address,
-    role: Role,
-    name: String,
-    latitude: i64,
-    longitude: i64,
-)
-```
-
-Registers a new participant in the system.
-
-**Parameters:**
-- `participant_address` - Address of the participant (requires authentication)
-- `role` - Role enum (Recycler, Collector, or Manufacturer)
-- `name` - Display name of the participant
-- `latitude` - Geographic latitude (can be negative)
-- `longitude` - Geographic longitude (can be negative)
-
-**Requirements:**
-- Participant must authenticate (require_auth)
-- Address can only register once
-- All parameters are required
-
-**Emits:** `ParticipantRegistered` event
-
-### Query Functions
-
-```rust
-pub fn get_participant(env: Env, address: Address) -> Option<Participant>
-```
-Returns participant information if registered, None otherwise.
-
-```rust
-pub fn is_registered(env: Env, address: Address) -> bool
-```
-Checks if an address is registered.
-
-## Events
-
-### ParticipantRegistered
-
-Emitted when a participant successfully registers.
-
-**Event Data:**
-- Topic: `("reg", participant_address)`
-- Data: `(role, name, latitude, longitude)`
+1. **Percentage Validation**: The sum of collector_percentage + owner_percentage must not exceed 100
+2. **Admin Authentication**: All update functions require authentication from the current admin
+3. **Initialization**: All configuration values must be set during contract initialization
 
 ## Usage Example
 
 ```rust
-use soroban_sdk::{Address, Env, String};
+// Initialize contract
+let admin = Address::from_string("GADMIN...");
+let token = Address::from_string("GTOKEN...");
+let charity = Address::from_string("GCHARITY...");
 
-// Register as a recycler
-let participant = Address::from_string("GPART...");
-let name = String::from_str(&env, "John Recycler");
-
-client.register_participant(
-    &participant,
-    &Role::Recycler,
-    &name,
-    &40_7128,  // New York latitude * 10000
-    &-74_0060  // New York longitude * 10000
+client.__constructor(
+    &admin,
+    &token,
+    &charity,
+    30,  // collector percentage
+    20   // owner percentage
 );
 
-// Check if registered
-if client.is_registered(&participant) {
-    let info = client.get_participant(&participant).unwrap();
-    // Use participant info
-}
+// Update configuration (admin only)
+client.update_percentages(&admin, 35, 25);
+
+// Read configuration (public)
+let collector_pct = client.get_collector_percentage();
+let owner_pct = client.get_owner_percentage();
 ```
-
-## Storage
-
-Participants are stored in persistent storage using the pattern:
-- Key: `(PARTICIPANT, address)`
-- Value: `Participant` struct
-
-This allows efficient lookup by address and ensures data persists across contract upgrades.
 
 ## Testing
 
 The contract includes comprehensive tests covering:
 
-### Registration Tests
-- ✅ Register as Recycler
-- ✅ Register as Collector
-- ✅ Register as Manufacturer
-- ✅ All roles work correctly
-- ✅ Multiple participants can register
-
-### Validation Tests
-- ✅ Cannot register twice (panic on duplicate)
-- ✅ Unregistered addresses return None
-- ✅ Registration requires authentication
-
-### Data Tests
-- ✅ Participant data stored correctly
-- ✅ Timestamp recorded at registration
-- ✅ Negative coordinates supported
-- ✅ All fields persist correctly
-
-### Event Tests
-- ✅ Event emitted on registration
-- ✅ Event contains correct data
+- ✅ Initialization with valid parameters
+- ✅ Initialization validation (rejects invalid percentages)
+- ✅ Admin-only access control
+- ✅ Configuration persistence
+- ✅ Percentage validation on updates
+- ✅ Admin transfer functionality
 
 Run tests with:
 ```bash
 cargo test -p scavenger
 ```
 
+## Architecture
+
+### Storage Layer (`storage.rs`)
+- Encapsulates all storage operations
+- Uses Soroban SDK's instance storage
+- Provides type-safe getters and setters
+
+### Contract Layer (`contract.rs`)
+- Implements business logic
+- Enforces access control
+- Validates input parameters
+- Exposes public API
+
+### Test Layer (`test.rs`)
+- Unit tests for all functionality
+- Tests both success and failure cases
+- Validates access control and data persistence
+
 ## Acceptance Criteria
 
-✅ **Users can register once** - Duplicate registration prevented with panic
+✅ **Configuration persists correctly** - All values stored in instance storage persist across calls
 
-✅ **All roles work correctly** - Recycler, Collector, and Manufacturer roles all function properly
+✅ **Only admin can update** - All update functions require admin authentication via `require_auth()`
 
-✅ **Event emits properly** - ParticipantRegistered event emitted with correct data
-
-## Security Features
-
-1. **Authentication Required** - Only the participant address can register itself
-2. **Single Registration** - Each address can only register once
-3. **Immutable Registration** - Once registered, participant data cannot be changed (future enhancement)
-4. **Persistent Storage** - Data survives contract upgrades
-
-## Geographic Coordinates
-
-Coordinates are stored as `i64` values to support:
-- Positive and negative values (for all global locations)
-- High precision (multiply by 10000 for 4 decimal places)
-- Example: 40.7128° N = 407128
+✅ **Percentages validate correctly** - Sum of percentages validated on initialization and all updates
 
 ## Future Enhancements
 
 Potential additions for future iterations:
-- Update participant information
-- Deregister/unregister functionality
-- Role-based permissions
-- Participant verification/approval system
-- Search participants by role
-- Geographic proximity queries
-- Reputation/rating system
+- Events/logging for configuration changes
+- Multi-sig admin support
+- Time-locked configuration changes
+- Configuration change history
