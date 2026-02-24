@@ -300,6 +300,41 @@ impl ScavengerContract {
         env.storage().instance().has(&key)
     }
 
+    /// Convert waste type enum to a human-readable string.
+    pub fn get_waste_type_string(env: Env, waste_type: WasteType) -> String {
+        String::from_str(&env, waste_type.as_str())
+    }
+
+    /// Convert participant role enum to a human-readable string.
+    pub fn get_participant_role_string(env: Env, role: ParticipantRole) -> String {
+        String::from_str(&env, role.as_str())
+    }
+
+    /// Validate whether a transfer route is allowed between two participants.
+    /// Valid routes:
+    /// - Recycler -> Collector
+    /// - Recycler -> Manufacturer
+    /// - Collector -> Manufacturer
+    pub fn is_valid_transfer(env: Env, from: Address, to: Address) -> bool {
+        let from_participant: Option<Participant> = env.storage().instance().get(&(from,));
+        let to_participant: Option<Participant> = env.storage().instance().get(&(to,));
+
+        let (Some(from_p), Some(to_p)) = (from_participant, to_participant) else {
+            return false;
+        };
+
+        if !from_p.is_registered || !to_p.is_registered {
+            return false;
+        }
+
+        matches!(
+            (from_p.role, to_p.role),
+            (ParticipantRole::Recycler, ParticipantRole::Collector)
+                | (ParticipantRole::Recycler, ParticipantRole::Manufacturer)
+                | (ParticipantRole::Collector, ParticipantRole::Manufacturer)
+        )
+    }
+
     /// Get the total count of waste records
     fn get_waste_count(env: &Env) -> u64 {
         env.storage().instance().get(&("waste_count",)).unwrap_or(0)
@@ -869,24 +904,7 @@ impl ScavengerContract {
             panic!("Caller does not own waste");
         }
 
-        let to_key = (to.clone(),);
-        let to_participant: Participant = env
-            .storage()
-            .instance()
-            .get(&to_key)
-            .expect("Recipient not registered");
-
-        let from_key = (from.clone(),);
-        let from_participant: Participant = env.storage().instance().get(&from_key).unwrap();
-
-        let valid = match (from_participant.role, to_participant.role) {
-            (ParticipantRole::Recycler, ParticipantRole::Collector) => true,
-            (ParticipantRole::Recycler, ParticipantRole::Manufacturer) => true,
-            (ParticipantRole::Collector, ParticipantRole::Manufacturer) => true,
-            _ => false,
-        };
-
-        if !valid {
+        if !Self::is_valid_transfer(env.clone(), from.clone(), to.clone()) {
             panic!("Invalid transfer");
         }
 
