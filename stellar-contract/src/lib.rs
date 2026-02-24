@@ -159,7 +159,15 @@ impl ScavengerContract {
         let mut history: Vec<WasteTransfer> =
             env.storage().instance().get(&key).unwrap_or(Vec::new(env));
 
-        let transfer = WasteTransfer::new(waste_id, from, to, env.ledger().timestamp(), note);
+        let transfer = WasteTransfer::new(
+            waste_id as u128,
+            from,
+            to,
+            env.ledger().timestamp(),
+            0,
+            0,
+            soroban_sdk::symbol_short!("note"),
+        );
 
         history.push_back(transfer);
         env.storage().instance().set(&key, &history);
@@ -374,15 +382,20 @@ impl ScavengerContract {
         waste.transfer_to(to.clone());
         env.storage().instance().set(&("waste_v2", waste_id), &waste);
 
-        let mut from_list: Vec<u128> = env
+        let from_list: Vec<u128> = env
             .storage()
             .instance()
             .get(&("participant_wastes", from.clone()))
             .unwrap_or(Vec::new(&env));
-        from_list.retain(|id| *id != waste_id);
+        let mut new_from_list = Vec::new(&env);
+        for id in from_list.iter() {
+            if id != waste_id {
+                new_from_list.push_back(id);
+            }
+        }
         env.storage()
             .instance()
-            .set(&("participant_wastes", from.clone()), &from_list);
+            .set(&("participant_wastes", from.clone()), &new_from_list);
 
         let mut to_list: Vec<u128> = env
             .storage()
@@ -421,6 +434,96 @@ impl ScavengerContract {
         );
 
         transfer
+    }
+
+    /// Transfer aggregated waste from collector to manufacturer
+    pub fn transfer_collected_waste(
+        env: Env,
+        waste_type: WasteType,
+        collector: Address,
+        manufacturer: Address,
+        latitude: i128,
+        longitude: i128,
+        notes: soroban_sdk::Symbol,
+    ) -> u128 {
+        collector.require_auth();
+
+        let collector_key = (collector.clone(),);
+        let collector_participant: Participant = env
+            .storage()
+            .instance()
+            .get(&collector_key)
+            .expect("Collector not registered");
+
+        if collector_participant.role != ParticipantRole::Collector {
+            panic!("Only collectors can use this");
+        }
+
+        let manufacturer_key = (manufacturer.clone(),);
+        let manufacturer_participant: Participant = env
+            .storage()
+            .instance()
+            .get(&manufacturer_key)
+            .expect("Manufacturer not registered");
+
+        if manufacturer_participant.role != ParticipantRole::Manufacturer {
+            panic!("Recipient must be manufacturer");
+        }
+
+        let waste_id = Self::next_waste_id(&env) as u128;
+        let timestamp = env.ledger().timestamp();
+
+        let waste = types::Waste::new(
+            waste_id,
+            waste_type,
+            0,
+            manufacturer.clone(),
+            latitude,
+            longitude,
+            timestamp,
+            true,
+            false,
+            manufacturer.clone(),
+        );
+
+        env.storage().instance().set(&("waste_v2", waste_id), &waste);
+
+        let mut manufacturer_list: Vec<u128> = env
+            .storage()
+            .instance()
+            .get(&("participant_wastes", manufacturer.clone()))
+            .unwrap_or(Vec::new(&env));
+        manufacturer_list.push_back(waste_id);
+        env.storage()
+            .instance()
+            .set(&("participant_wastes", manufacturer.clone()), &manufacturer_list);
+
+        let transfer = WasteTransfer::new(
+            waste_id,
+            collector.clone(),
+            manufacturer.clone(),
+            timestamp,
+            latitude,
+            longitude,
+            notes,
+        );
+
+        let mut history: Vec<WasteTransfer> = env
+            .storage()
+            .instance()
+            .get(&("transfer_history", waste_id))
+            .unwrap_or(Vec::new(&env));
+        history.push_back(transfer);
+        env.storage()
+            .instance()
+            .set(&("transfer_history", waste_id), &history);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("bulk_xfr"), waste_id),
+            (collector, manufacturer, waste_type, timestamp),
+        );
+
+        waste_id
     }
 
     /// Batch submit multiple materials for recycling
@@ -580,31 +683,9 @@ impl ScavengerContract {
         env.storage().instance().get(&("stats", participant))
     }
 
-    // ========== Incentive Storage Functions ==========
-
-    /// Store an incentive record by ID
-    /// Internal helper function for efficient incentive storage
-    fn set_incentive(env: &Env, incentive_id: u64, incentive: &Incentive) {
-        let key = ("incentive", incentive_id);
-        env.storage().instance().set(&key, incentive);
-    }
-
-    /// Retrieve an incentive record by ID
-    /// Returns None if incentive doesn't exist
-    fn get_incentive(env: &Env, incentive_id: u64) -> Option<Incentive> {
-        let key = ("incentive", incentive_id);
-        env.storage().instance().get(&key)
-    }
-
-    /// Check if an incentive record exists
-    pub fn incentive_exists(env: Env, incentive_id: u64) -> bool {
-        let key = ("incentive", incentive_id);
-        env.storage().instance().has(&key)
-    }
-
     /// Get incentive by ID (public getter)
     pub fn get_incentive_by_id(env: Env, incentive_id: u64) -> Option<Incentive> {
-        Self::get_incentive(&env, incentive_id)
+        Self::get_incentive_internal(&env, incentive_id)
     }
 
     /// Get all incentive IDs created by a specific rewarder (manufacturer)
@@ -678,7 +759,7 @@ impl ScavengerContract {
     pub fn deactivate_incentive(env: Env, incentive_id: u64, rewarder: Address) -> Incentive {
         rewarder.require_auth();
 
-        let mut incentive = Self::get_incentive(&env, incentive_id).expect("Incentive not found");
+        let mut incentive = Self::get_incentive_internal(&env, incentive_id).expect("Incentive not found");
 
         // Verify caller is the creator
         if incentive.rewarder != rewarder {
@@ -713,7 +794,7 @@ impl ScavengerContract {
         }
 
         // Get incentive
-        let mut incentive = Self::get_incentive(&env, incentive_id).expect("Incentive not found");
+        let mut incentive = Self::get_incentive_internal(&env, incentive_id).expect("Incentive not found");
 
         // Verify waste types match
         if incentive.waste_type != material.waste_type {
@@ -739,157 +820,6 @@ impl ScavengerContract {
         env.storage().instance().set(&("stats", claimer), &stats);
 
         reward
-    }
-
-    /// Create a new incentive program
-    /// Only manufacturers can create incentives
-    pub fn create_incentive(
-        env: Env,
-        manufacturer: Address,
-        waste_type: WasteType,
-        reward_amount: u64,
-    ) -> Incentive {
-        manufacturer.require_auth();
-
-        // Verify manufacturer has Manufacturer role
-        let manufacturer_key = (manufacturer.clone(),);
-        let participant: Participant = env
-            .storage()
-            .instance()
-            .get(&manufacturer_key)
-            .expect("Manufacturer not registered");
-
-        if !participant.role.can_manufacture() {
-            panic!("Only manufacturers can create incentives");
-        }
-
-        // Validate reward amount
-        if reward_amount == 0 {
-            panic!("Reward amount must be greater than zero");
-        }
-
-        // Generate next incentive ID
-        let incentive_id = Self::next_incentive_id(&env);
-
-        // Create incentive
-        let incentive = Incentive::new(
-            incentive_id,
-            manufacturer,
-            waste_type,
-            reward_amount,
-            env.ledger().timestamp(),
-        );
-
-        // Store incentive
-        Self::set_incentive(&env, incentive_id, &incentive);
-
-        incentive
-    }
-
-    /// Get incentive by ID
-    pub fn get_incentive(env: Env, incentive_id: u64) -> Option<Incentive> {
-        Self::get_incentive_internal(&env, incentive_id)
-    }
-
-    /// Check if an incentive exists
-    pub fn incentive_exists(env: Env, incentive_id: u64) -> bool {
-        let key = ("incentive", incentive_id);
-        env.storage().instance().has(&key)
-    }
-
-    /// Get multiple incentives by IDs (batch retrieval)
-    pub fn get_incentives_batch(
-        env: Env,
-        incentive_ids: soroban_sdk::Vec<u64>,
-    ) -> soroban_sdk::Vec<Option<Incentive>> {
-        let mut results = soroban_sdk::Vec::new(&env);
-        
-        for incentive_id in incentive_ids.iter() {
-            results.push_back(Self::get_incentive_internal(&env, incentive_id));
-        }
-        
-        results
-    }
-
-    /// Deactivate an incentive
-    /// Only the manufacturer who created the incentive can deactivate it
-    pub fn deactivate_incentive(
-        env: Env,
-        incentive_id: u64,
-        manufacturer: Address,
-    ) -> Incentive {
-        manufacturer.require_auth();
-
-        // Retrieve incentive
-        let mut incentive: Incentive = Self::get_incentive_internal(&env, incentive_id)
-            .expect("Incentive not found");
-
-        // Verify manufacturer matches
-        if incentive.manufacturer != manufacturer {
-            panic!("Only the incentive creator can modify this incentive");
-        }
-
-        // Deactivate
-        incentive.deactivate();
-        Self::set_incentive(&env, incentive_id, &incentive);
-
-        incentive
-    }
-
-    /// Activate an incentive
-    /// Only the manufacturer who created the incentive can activate it
-    pub fn activate_incentive(
-        env: Env,
-        incentive_id: u64,
-        manufacturer: Address,
-    ) -> Incentive {
-        manufacturer.require_auth();
-
-        // Retrieve incentive
-        let mut incentive: Incentive = Self::get_incentive_internal(&env, incentive_id)
-            .expect("Incentive not found");
-
-        // Verify manufacturer matches
-        if incentive.manufacturer != manufacturer {
-            panic!("Only the incentive creator can modify this incentive");
-        }
-
-        // Activate
-        incentive.activate();
-        Self::set_incentive(&env, incentive_id, &incentive);
-
-        incentive
-    }
-
-    /// Update incentive reward amount
-    /// Only the manufacturer who created the incentive can update it
-    pub fn update_incentive_reward(
-        env: Env,
-        incentive_id: u64,
-        manufacturer: Address,
-        new_reward_amount: u64,
-    ) -> Incentive {
-        manufacturer.require_auth();
-
-        // Validate new reward amount
-        if new_reward_amount == 0 {
-            panic!("Reward amount must be greater than zero");
-        }
-
-        // Retrieve incentive
-        let mut incentive: Incentive = Self::get_incentive_internal(&env, incentive_id)
-            .expect("Incentive not found");
-
-        // Verify manufacturer matches
-        if incentive.manufacturer != manufacturer {
-            panic!("Only the incentive creator can modify this incentive");
-        }
-
-        // Update reward amount
-        incentive.reward_amount = new_reward_amount;
-        Self::set_incentive(&env, incentive_id, &incentive);
-
-        incentive
     }
 }
 
@@ -1156,6 +1086,31 @@ mod test {
         assert_eq!(transfer.waste_id, waste_id);
         assert_eq!(transfer.from, recycler);
         assert_eq!(transfer.to, collector);
+    }
+
+    #[test]
+    fn test_transfer_collected_waste() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, ScavengerContract);
+        let client = ScavengerContractClient::new(&env, &contract_id);
+
+        let collector = Address::generate(&env);
+        let manufacturer = Address::generate(&env);
+        env.mock_all_auths();
+
+        client.register_participant(&collector, &ParticipantRole::Collector);
+        client.register_participant(&manufacturer, &ParticipantRole::Manufacturer);
+
+        let waste_id = client.transfer_collected_waste(
+            &WasteType::Plastic,
+            &collector,
+            &manufacturer,
+            &41_000_000,
+            &-73_500_000,
+            &soroban_sdk::symbol_short!("bulk"),
+        );
+
+        assert_eq!(waste_id, 1);
     }
 
     #[test]
