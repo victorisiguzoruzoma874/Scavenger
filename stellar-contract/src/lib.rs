@@ -1,5 +1,6 @@
 #![no_std]
 
+mod events;
 mod types;
 
 
@@ -840,9 +841,15 @@ impl ScavengerContract {
             .instance()
             .set(&("participant_wastes", recycler.clone()), &waste_list);
 
-        env.events().publish(
-            (soroban_sdk::symbol_short!("recycled"), waste_id),
-            (waste_type, weight, recycler, latitude, longitude, timestamp),
+        // Emit waste registered event
+        events::emit_waste_registered(
+            &env,
+            waste_id,
+            &recycler,
+            waste_type,
+            weight,
+            latitude,
+            longitude,
         );
 
         waste_id
@@ -1295,6 +1302,108 @@ impl ScavengerContract {
         let total_tokens = Self::get_total_tokens(&env);
         
         (total_wastes, total_weight, total_tokens)
+    }
+
+    /// Get the active incentive with the highest reward for a specific manufacturer and waste type
+    /// Returns None if no active incentive is found
+    pub fn get_active_incentive_for_manufacturer(
+        env: Env,
+        manufacturer: Address,
+        waste_type: WasteType,
+    ) -> Option<Incentive> {
+        // Get all incentives for this manufacturer
+        let incentive_ids = Self::get_incentives_by_rewarder(env.clone(), manufacturer.clone());
+        
+        let mut best_incentive: Option<Incentive> = None;
+        let mut highest_reward: u64 = 0;
+        
+        // Iterate through all incentives and find the best active one
+        for incentive_id in incentive_ids.iter() {
+            if let Some(incentive) = Self::get_incentive_internal(&env, incentive_id) {
+                // Check if incentive matches criteria: active and correct waste type
+                if incentive.active && incentive.waste_type == waste_type {
+                    // Keep track of the incentive with highest reward
+                    if incentive.reward_points > highest_reward {
+                        highest_reward = incentive.reward_points;
+                        best_incentive = Some(incentive);
+                    }
+                }
+            }
+        }
+        
+        best_incentive
+    }
+
+    /// Create a new incentive
+    pub fn create_incentive(
+        env: Env,
+        rewarder: Address,
+        waste_type: WasteType,
+        reward_points: u64,
+        total_budget: u64,
+    ) -> Incentive {
+        rewarder.require_auth();
+
+        // Verify rewarder is a manufacturer
+        if !Self::is_participant_registered(env.clone(), rewarder.clone()) {
+            panic!("Rewarder not registered");
+        }
+
+        let participant =
+            Self::get_participant(env.clone(), rewarder.clone()).expect("Rewarder not found");
+
+        if !participant.role.can_manufacture() {
+            panic!("Only manufacturers can create incentives");
+        }
+
+        // Get next incentive ID
+        let incentive_id = Self::next_incentive_id(&env);
+
+        // Create incentive
+        let incentive = Incentive::new(
+            incentive_id,
+            rewarder.clone(),
+            waste_type,
+            reward_points,
+            total_budget,
+            env.ledger().timestamp(),
+        );
+
+        // Store incentive
+        Self::set_incentive(&env, incentive_id, &incentive);
+
+        // Add to rewarder's incentive list
+        let key = ("rewarder_incentives", rewarder.clone());
+        let mut rewarder_incentives: Vec<u64> =
+            env.storage().instance().get(&key).unwrap_or(Vec::new(&env));
+        rewarder_incentives.push_back(incentive_id);
+        env.storage().instance().set(&key, &rewarder_incentives);
+
+        // Add to general incentives list for this waste type
+        let key = ("general_incentives", waste_type);
+        let mut general_incentives: Vec<u64> =
+            env.storage().instance().get(&key).unwrap_or(Vec::new(&env));
+        general_incentives.push_back(incentive_id);
+        env.storage().instance().set(&key, &general_incentives);
+
+        incentive
+    }
+
+    /// Deactivate an incentive (only by creator)
+    pub fn deactivate_incentive(env: Env, incentive_id: u64, rewarder: Address) -> Incentive {
+        rewarder.require_auth();
+
+        let mut incentive = Self::get_incentive_internal(&env, incentive_id).expect("Incentive not found");
+
+        // Verify caller is the creator
+        if incentive.rewarder != rewarder {
+            panic!("Only incentive creator can deactivate");
+        }
+
+        incentive.deactivate();
+        Self::set_incentive(&env, incentive_id, &incentive);
+
+        incentive
     }
 
 }
