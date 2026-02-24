@@ -466,6 +466,28 @@ impl ScavengerContract {
         env.storage().instance().get(&key)
     }
 
+    /// Get all waste IDs owned by a participant
+    /// Returns a vector of waste IDs where the participant is the current submitter/owner
+    pub fn get_participant_wastes(env: Env, participant: Address) -> Vec<u64> {
+        let mut waste_ids = Vec::new(&env);
+        let waste_count = env.storage()
+            .instance()
+            .get::<_, u64>(&("waste_count",))
+            .unwrap_or(0);
+
+        // Iterate through all wastes and collect IDs owned by participant
+        for waste_id in 1..=waste_count {
+            let key = ("waste", waste_id);
+            if let Some(material) = env.storage().instance().get::<_, Material>(&key) {
+                if material.submitter == participant {
+                    waste_ids.push_back(waste_id);
+                }
+            }
+        }
+
+        waste_ids
+    }
+
     /// Get multiple wastes by IDs (batch retrieval)
     pub fn get_wastes_batch(
         env: Env,
