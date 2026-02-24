@@ -309,6 +309,33 @@ fn test_get_incentive_by_id() {
     assert_eq!(retrieved.waste_type, WasteType::Glass);
     assert_eq!(retrieved.reward_points, 40);
 }
+#[test]
+fn test_get_incentive_by_id_not_found() {
+    let env = Env::default();
+    let (client, admin, token_address, charity_address) = create_test_contract(&env);
+
+    env.mock_all_auths();
+    client.__constructor(&admin, &token_address, &charity_address, &30, &20);
+
+    // Try to get a non-existent incentive
+    let result = client.get_incentive_by_id(&999);
+    assert!(result.is_none());
+
+    // Create an incentive
+    let manufacturer = Address::generate(&env);
+    let name = String::from_str(&env, "Test Manufacturer");
+    client.register_participant(&manufacturer, &Role::Manufacturer, &name, &100, &200);
+
+    let created = client.create_incentive(&manufacturer, &WasteType::Glass, &40, &7000);
+
+    // Verify the created incentive exists
+    let retrieved = client.get_incentive_by_id(&created.id);
+    assert!(retrieved.is_some());
+
+    // Try to get a different non-existent ID
+    let result = client.get_incentive_by_id(&created.id + 100);
+    assert!(result.is_none());
+}
 
 #[test]
 fn test_incentive_exists() {
