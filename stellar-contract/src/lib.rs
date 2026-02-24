@@ -279,6 +279,13 @@ impl ScavengerContract {
         env.storage().instance().get(&key).unwrap_or(Vec::new(&env))
     }
 
+    /// Get complete transfer history for a waste (alias for get_transfer_history)
+    /// Returns chronologically ordered list of all transfers
+    /// Includes all transfer details: from, to, timestamp, and notes
+    pub fn get_waste_transfer_history(env: Env, waste_id: u64) -> Vec<WasteTransfer> {
+        Self::get_transfer_history(env, waste_id)
+    }
+
     /// Record a waste transfer
     /// Appends to immutable history
     fn record_transfer(env: &Env, waste_id: u64, from: Address, to: Address, note: String) {
