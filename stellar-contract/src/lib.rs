@@ -638,6 +638,44 @@ impl ScavengerContract {
         env.storage().instance().get(&key).unwrap_or(Vec::new(&env))
     }
 
+    /// Get all active incentives for a specific waste type, sorted by reward amount
+    /// Returns only active incentives, sorted in descending order by reward_points
+    pub fn get_incentives(env: Env, waste_type: WasteType) -> Vec<Incentive> {
+        // Get all incentive IDs for this waste type
+        let incentive_ids = Self::get_incentives_by_waste_type(env.clone(), waste_type);
+        
+        let mut active_incentives = Vec::new(&env);
+        
+        // Collect all active incentives
+        for incentive_id in incentive_ids.iter() {
+            if let Some(incentive) = Self::get_incentive_internal(&env, incentive_id) {
+                // Filter: only include active incentives
+                if incentive.active {
+                    active_incentives.push_back(incentive);
+                }
+            }
+        }
+        
+        // Sort by reward_points in descending order (highest rewards first)
+        // Using bubble sort since Soroban Vec doesn't have built-in sort
+        let len = active_incentives.len();
+        for i in 0..len {
+            for j in 0..(len - i - 1) {
+                let curr = active_incentives.get(j).unwrap();
+                let next = active_incentives.get(j + 1).unwrap();
+                
+                if curr.reward_points < next.reward_points {
+                    // Swap elements
+                    let temp = curr.clone();
+                    active_incentives.set(j, next);
+                    active_incentives.set(j + 1, temp);
+                }
+            }
+        }
+        
+        active_incentives
+    }
+
     /// Create a new incentive
     pub fn create_incentive(
         env: Env,
