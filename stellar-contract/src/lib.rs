@@ -9,6 +9,8 @@ use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, E
 // Storage keys
 const ADMIN: Symbol = symbol_short!("ADMIN");
 const CHARITY: Symbol = symbol_short!("CHARITY");
+const COLLECTOR_PCT: Symbol = symbol_short!("COL_PCT");
+const OWNER_PCT: Symbol = symbol_short!("OWN_PCT");
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -78,6 +80,70 @@ impl ScavengerContract {
     /// Get the charity contract address
     pub fn get_charity_contract(env: Env) -> Option<Address> {
         env.storage().instance().get(&CHARITY)
+    }
+
+    // ========== Percentage Configuration Functions ==========
+
+    /// Set both collector and owner percentages (admin only)
+    pub fn set_percentages(
+        env: Env,
+        admin: Address,
+        collector_percentage: u32,
+        owner_percentage: u32,
+    ) {
+        Self::require_admin(&env, &admin);
+        
+        // Validate percentages sum
+        if collector_percentage + owner_percentage > 100 {
+            panic!("Total percentages cannot exceed 100");
+        }
+        
+        env.storage().instance().set(&COLLECTOR_PCT, &collector_percentage);
+        env.storage().instance().set(&OWNER_PCT, &owner_percentage);
+    }
+
+    /// Get the collector percentage
+    pub fn get_collector_percentage(env: Env) -> Option<u32> {
+        env.storage().instance().get(&COLLECTOR_PCT)
+    }
+
+    /// Get the owner percentage
+    pub fn get_owner_percentage(env: Env) -> Option<u32> {
+        env.storage().instance().get(&OWNER_PCT)
+    }
+
+    /// Update only the collector percentage (admin only)
+    pub fn set_collector_percentage(env: Env, admin: Address, new_percentage: u32) {
+        Self::require_admin(&env, &admin);
+        
+        // Get current owner percentage to validate total
+        let owner_pct: u32 = env.storage()
+            .instance()
+            .get(&OWNER_PCT)
+            .unwrap_or(0);
+        
+        if new_percentage + owner_pct > 100 {
+            panic!("Total percentages cannot exceed 100");
+        }
+        
+        env.storage().instance().set(&COLLECTOR_PCT, &new_percentage);
+    }
+
+    /// Update only the owner percentage (admin only)
+    pub fn set_owner_percentage(env: Env, admin: Address, new_percentage: u32) {
+        Self::require_admin(&env, &admin);
+        
+        // Get current collector percentage to validate total
+        let collector_pct: u32 = env.storage()
+            .instance()
+            .get(&COLLECTOR_PCT)
+            .unwrap_or(0);
+        
+        if collector_pct + new_percentage > 100 {
+            panic!("Total percentages cannot exceed 100");
+        }
+        
+        env.storage().instance().set(&OWNER_PCT, &new_percentage);
     }
 
     // ========== Participant Storage Functions ==========
