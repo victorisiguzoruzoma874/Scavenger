@@ -519,6 +519,52 @@ impl ScavengerContract {
         incentive
     }
 
+    /// Update an existing incentive's reward and maximum waste amount
+    /// Only the rewarder can update their incentive
+    /// Only active incentives can be updated
+    pub fn update_incentive(
+        env: Env,
+        incentive_id: u64,
+        new_reward: u128,
+        new_max_waste_amount: u128,
+    ) -> Incentive {
+        // Step 1: Retrieve incentive (existence check)
+        let mut incentive: Incentive = Self::get_incentive(&env, incentive_id)
+            .expect("Incentive not found");
+
+        // Step 2: Authorization check
+        incentive.rewarder.require_auth();
+
+        // Step 3: Active status check
+        if !incentive.is_active {
+            panic!("Incentive is not active");
+        }
+
+        // Step 4: Input validation
+        if new_reward == 0 {
+            panic!("Reward must be greater than zero");
+        }
+        if new_max_waste_amount == 0 {
+            panic!("Max waste amount must be greater than zero");
+        }
+
+        // Step 5: Update fields (atomic)
+        incentive.reward = new_reward;
+        incentive.max_waste_amount = new_max_waste_amount;
+
+        // Step 6: Persist to storage
+        Self::set_incentive(&env, incentive_id, &incentive);
+
+        // Step 7: Emit event
+        env.events().publish(
+            (symbol_short!("inc_upd"), incentive_id),
+            (incentive.rewarder.clone(), new_reward, new_max_waste_amount)
+        );
+
+        incentive
+    }
+
+
     /// Calculate reward for a given waste amount based on an incentive
     /// Returns the reward amount, respecting max_waste_amount and is_active status
     pub fn calculate_incentive_reward(
