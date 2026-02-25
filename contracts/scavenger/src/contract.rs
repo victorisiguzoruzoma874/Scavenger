@@ -260,6 +260,37 @@ impl ScavengerContract {
         Storage::get_incentives_by_waste_type(env, waste_type)
     }
 
+    /// Get the active incentive with the highest reward for a specific manufacturer and waste type
+    /// Returns None if no active incentive is found
+    pub fn get_active_incentive_for_manufacturer(
+        env: &Env,
+        manufacturer: Address,
+        waste_type: WasteType,
+    ) -> Option<Incentive> {
+        // Get all incentives for this manufacturer
+        let incentive_ids = Storage::get_incentives_by_rewarder(env, &manufacturer);
+
+        let mut best_incentive: Option<Incentive> = None;
+        let mut highest_reward: u64 = 0;
+
+        // Iterate through all incentives and find the best active one
+        for incentive_id in incentive_ids.iter() {
+            if let Some(incentive) = Storage::get_incentive(env, incentive_id) {
+                // Check if incentive matches criteria: active and correct waste type
+                if incentive.active && incentive.waste_type == waste_type {
+                    // Keep track of the incentive with highest reward
+                    if incentive.reward_points > highest_reward {
+                        highest_reward = incentive.reward_points;
+                        best_incentive = Some(incentive);
+                    }
+                }
+            }
+        }
+
+        best_incentive
+    }
+
+
     /// Submit material for recycling
     pub fn submit_material(
         env: &Env,
@@ -284,6 +315,7 @@ impl ScavengerContract {
         );
 
         Storage::set_material(env, material_id, &material);
+        Storage::add_to_total_weight(env, weight);
         material
     }
 
@@ -443,6 +475,17 @@ impl ScavengerContract {
     /// Get participant statistics
     pub fn get_participant_stats(env: &Env, address: Address) -> crate::types::ParticipantStats {
         Storage::get_stats(env, &address)
+    }
+
+    /// Get supply chain statistics (total wastes, total weight, total tokens earned)
+    pub fn get_supply_chain_stats(env: &Env) -> (u64, u64, i128) {
+        let total_wastes = env.storage().instance()
+            .get(&soroban_sdk::symbol_short!("MAT_CNT"))
+            .unwrap_or(0);
+        let total_weight = Storage::get_total_weight(env);
+        let total_tokens = Storage::get_total_earned(env);
+        
+        (total_wastes, total_weight, total_tokens)
     }
 
     // Private helper function to require admin authentication
